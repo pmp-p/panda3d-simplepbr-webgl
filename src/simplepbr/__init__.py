@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import sys
 from dataclasses import (
     dataclass,
     field,
@@ -11,6 +11,7 @@ import builtins
 import functools
 import math
 import os
+import typing
 from typing_extensions import (
     Any,
     ClassVar,
@@ -84,7 +85,6 @@ def _get_default_330() -> bool:
         return True
 
     return False
-
 
 TypeT = TypeVar('TypeT', bound=type)
 def add_prc_fields(cls: TypeT) -> TypeT:
@@ -176,6 +176,23 @@ class Pipeline:
     env_map: EnvMap | str | None = None
     calculate_normalmap_blue: bool = True
 
+    if sys.platform in ('emscripten','wasi'):
+        use_330 = False
+        use_normal_maps = False
+        use_emission_maps = False
+        use_occlusion_maps = False
+        enable_shadows = False
+        enable_fog = False
+        enable_hardware_skinning = False
+    else:
+        use_330 = False
+        use_normal_maps: bool = True
+        use_emission_maps: bool = True
+        use_occlusion_maps: bool = True
+        enable_shadows: bool = True
+        enable_fog: bool  = True
+        enable_hardware_skinning: bool = True
+
     # Private instance variables
     _shader_ready: bool = False
     _filtermgr: FilterManager = field(init=False)
@@ -183,6 +200,8 @@ class Pipeline:
 
     def __post_init__(self, use_hardware_skinning: bool | None) -> None:
         self._shader_ready = False
+
+        self._is_web_gl = 'WebGL' in self.window.type.name
 
         # Create a FilterManager instance
         self._filtermgr = FilterManager(self.window, self.camera_node)
@@ -291,6 +310,7 @@ class Pipeline:
         self.render_node.set_shader_input('global_shadow_bias', self.shadow_bias)
         self._set_env_map_uniforms()
 
+
     def _setup_tonemapping(self) -> None:
         if self._shader_ready:
             # Destroy previous buffers so we can re-create
@@ -311,10 +331,7 @@ class Pipeline:
         scene_tex = p3d.Texture()
         scene_tex.set_format(p3d.Texture.F_rgba16)
         scene_tex.set_component_type(p3d.Texture.T_float)
-        postquad = self._filtermgr.render_scene_into(colortex=scene_tex, fbprops=fbprops)
 
-        if postquad is None:
-            raise RuntimeError('Failed to setup FilterManager')
 
         defines = {
             'USE_330': self.use_330,
@@ -327,12 +344,20 @@ class Pipeline:
             'tonemap.frag',
             defines
         )
-        postquad.set_shader(tonemap_shader)
-        postquad.set_shader_input('tex', scene_tex)
-        postquad.set_shader_input('exposure', self.exposure)
-        if self.sdr_lut:
-            postquad.set_shader_input('sdr_lut', self.sdr_lut)
-            postquad.set_shader_input('sdr_lut_factor', self.sdr_lut_factor)
+
+        postquad = self._filtermgr.render_scene_into(colortex=scene_tex, fbprops=fbprops)
+
+
+        if postquad is None:
+            if not sys.platform in ('emscripten','wasi'):
+                raise RuntimeError('Failed to setup FilterManager')
+        else:
+            postquad.set_shader(tonemap_shader)
+            postquad.set_shader_input('tex', scene_tex)
+            postquad.set_shader_input('exposure', self.exposure)
+            if self.sdr_lut:
+                postquad.set_shader_input('sdr_lut', self.sdr_lut)
+                postquad.set_shader_input('sdr_lut_factor', self.sdr_lut_factor)
 
         self._post_process_quad = postquad
 
@@ -387,15 +412,16 @@ class Pipeline:
             state = caster.get_initial_state()
             if not state.has_attrib(p3d.ShaderAttrib):
                 attr = self._create_shadow_shader_attrib()
-                state = state.add_attrib(attr, 1)
-                state = state.remove_attrib(p3d.CullFaceAttrib)
+                state.add_attrib(attr, 1)
+                state.remove_attrib(p3d.CullFaceAttrib)
                 caster.set_initial_state(state)
 
         if recompile:
             self._recompile_pbr()
 
         # Copy window background color so ShowBase.set_background_color() works
-        self._filtermgr.buffers[0].set_clear_color(self.window.get_clear_color())
+        if self._filtermgr.buffers:
+            self._filtermgr.buffers[0].set_clear_color(self.window.get_clear_color())
 
         return task.DS_cont
 

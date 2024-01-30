@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import sys
 import os
 
 from typing_extensions import (
@@ -64,8 +64,24 @@ def _load_shader_str(shaderpath: str, defines: ShaderDefinesType | None = None) 
     defines['p3d_TextureMetalRoughness'] = 'p3d_TextureSelector'
 
     shaderstr = _add_shader_defines(shaderstr, defines)
+
+
+    valid_version : str = ""
+
+    if sys.platform in ('emscripten','wasi'):
+        if 'USE_330' in defines:
+            valid_version = '#version 300 es\nprecision highp float;'
+        else:
+            valid_version = '#version 100\nprecision highp float;\n'
+    elif 'USE_330' in defines:
+        valid_version = '#version 330'
+    else:
+        valid_version = ""
+
+    if valid_version:
+        shaderstr = shaderstr.replace('#version 120', valid_version)
+
     if 'USE_330' in defines:
-        shaderstr = shaderstr.replace('#version 120', '#version 330')
         if shaderpath.endswith('vert'):
             shaderstr = shaderstr.replace('varying ', 'out ')
             shaderstr = shaderstr.replace('attribute ', 'in ')
